@@ -4,10 +4,7 @@ from collections import defaultdict
 import time
 from os.path import join
 from basic_hasher import build_hash_and_pickle, hashing_algorithm
-import os
-sys.path.insert(0, os.path.abspath(".."))
-sys.path.insert(0, os.path.abspath("../.."))
-from BIOINFO_M260B.helpers import *
+from BIOINFO_M260B.helpers import read_reads, read_reference, pretty_print_aligned_reads_with_ref
 
 READ_LENGTH = 50
 
@@ -36,6 +33,7 @@ def generate_pileup(aligned_fn):
                 # print time.clock() - start, 'seconds'
             else:
                 lines_to_process.append(line)
+
     snps = [v for v in changes if v[0] == 'SNP']
     insertions = [v for v in changes if v[0] == 'INS']
     deletions = [v for v in changes if v[0] == 'DEL']
@@ -44,7 +42,6 @@ def generate_pileup(aligned_fn):
 
 def process_lines(genome_lines):
     """
-
     :param genome_lines: Lines in between dashes from the saved output of the basic_aligner
     :return: snps (the snps from this set of lines)
              output_lines (the lines to print, given this set of lines)
@@ -72,29 +69,26 @@ def align_to_donor(donor, read):
     :return: The best scoring
     """
 
-    mismatches = [1 if donor[i] != ' ' and read[i] != ' ' and
-                       read[i] != donor[i] else 0 for i in range(len(donor))]
-    n_mismatches = sum(mismatches)
+    scores = [1 if donor[i] != ' ' and read[i] != ' ' and
+                   read[i] == donor[i] else 0 for i in range(len(donor))]
+    n_score = sum(scores)
     overlaps = [1 if donor[i] != ' ' and read[i] != ' ' else 0 for i in range(len(donor))]
     n_overlaps = sum(overlaps)
-    score = n_overlaps - n_mismatches
-    if n_mismatches <= 2:
-        return read, score
+    if n_score >= n_overlaps- 2:
+        return read, n_score
     else:
         best_read = read
-        best_score = score
+        best_score = n_score
 
     for shift_amount in range(-3, 0) + range(1, 4):  # This can be improved
         if shift_amount > 0:
             shifted_read = ' ' * shift_amount + read
         elif shift_amount < 0:
             shifted_read = read[-shift_amount:] + ' ' * (-shift_amount)
-        mismatches = [1 if donor[i] != ' ' and shifted_read[i] != ' ' and
-                           shifted_read[i] != donor[i] else 0 for i in range(len(donor))]
-        n_mismatches = sum(mismatches)
-        overlaps = [1 if donor[i] != ' ' and shifted_read[i] != ' ' else 0 for i in range(len(donor))]
-        n_overlaps = sum(overlaps)
-        score = n_overlaps - n_mismatches - 3 * abs(shift_amount)
+        scores = [1 if donor[i] != ' ' and shifted_read[i] == donor[i] else 0 for i in range(len(donor))]
+        n_score = sum(scores)
+
+        score = n_score - 3 * abs(shift_amount)
         if score > best_score:
             best_read = shifted_read
             best_score = score
@@ -127,7 +121,7 @@ def generate_donor(ref, aligned_reads):
         un_donored_reads = []
         for padded_read in padded_reads:
             re_aligned_read, score = align_to_donor(donor_genome, padded_read)
-            if score < 10:  # If the alignment isn't good, throw the read back in the set of reads to be aligned.
+            if score < len(padded_read)*0.6:  # If the alignment isn't good, throw the read back in the set of reads to be aligned.
                 un_donored_reads.append(padded_read)
             else:
                 donor_genome = ''.join([re_aligned_read[i] if donor_genome[i] == ' ' else donor_genome[i]
@@ -149,30 +143,49 @@ def generate_donor(ref, aligned_reads):
 def edit_distance_matrix(ref, donor):
     """
     Computes the edit distance matrix between the donor and reference
-
     This algorithm makes substitutions, insertions, and deletions all equal.
     Does that strike you as making biological sense? You might try changing the cost of
     deletions and insertions vs snps.
+    DEL: 1
+    INS: 1
+    =: 0
+    !=: 3
     :param ref: reference genome (as an ACTG string)
     :param donor: donor genome guess (as an ACTG string)
     :return: complete (len(ref) + 1) x (len(donor) + 1) matrix computing all changes
     """
 
     output_matrix = np.zeros((len(ref), len(donor)))
+    tag = [["NA" for x in range(len(ref))] for y in range(len(donor))]
     # print len(ref), len(donor)
     # print output_matrix
     # This is a very fast and memory-efficient way to allocate a matrix
     for i in range(len(ref)):
-        output_matrix[i, 0] = i
+        output_matrix[i, 0] = 0
+        tag[i][0] = "NA"
     for j in range(len(donor)):
-        output_matrix[0, j] = j
+        output_matrix[0, j] = 0
+        tag[j][0] = "NA"
     for j in range(1, len(donor)):
         for i in range(1, len(ref)):  # Big opportunities for improvement right here.
-            deletion = output_matrix[i - 1, j] + 1
-            insertion = output_matrix[i, j - 1] + 1
-            identity = output_matrix[i - 1, j - 1] if ref[i] == donor[j] else np.inf
-            substitution = output_matrix[i - 1, j - 1] + 1 if ref[i] != donor[j] else np.inf
-            output_matrix[i, j] = min(insertion, deletion, identity, substitution)
+            result = {}
+            if tag[i - 1][j] == "DEL":
+                result["DEL"] = output_matrix[i - 1, j] + 1
+            else:
+                result["DEL"] = output_matrix[i - 1, j] + 5
+            if tag[i][j-1] == "INS":
+                result["INS"] = output_matrix[i, j - 1] + 1
+            else:
+                result["INS"] = output_matrix[i, j - 1] + 5
+            result["IND"] = output_matrix[i - 1, j - 1] - 1 if ref[i] == donor[j] else np.inf
+            result["SNP"] = output_matrix[i - 1, j - 1] + 3 if ref[i] != donor[j] else np.inf
+
+            output_matrix[i, j] = min(result.itervalues())
+            if output_matrix[i, j] >= 0:
+                tag[i][j] = min(result.iterkeys(), key=(lambda key: result[key]))
+            else:
+                output_matrix[i, j] = 0
+                tag[i][j] = "NA"
     return output_matrix
 
 
@@ -182,7 +195,6 @@ def identify_changes(ref, donor, offset):
     SNPS, Insertions, and Deletions.
     Note that if you let either sequence get too large (more than a few thousand), you will
     run into memory issues.
-
     :param ref: reference sequence (ATCG string)
     :param donor: donor sequence (ATCG string)
     :param offset: The starting location in the genome.
@@ -192,7 +204,7 @@ def identify_changes(ref, donor, offset):
     ref = '${}'.format(ref)
     donor = '${}'.format(donor)
     edit_matrix = edit_distance_matrix(ref=ref, donor=donor)
-    print edit_matrix
+    # print edit_matrix
     current_row = len(ref) - 1
     current_column = len(donor) - 1
     changes = []
@@ -256,6 +268,8 @@ def identify_changes(ref, donor, offset):
         else:
             raise ValueError
     changes = sorted(changes, key=lambda change: change[-1])
+    if len(changes) > 7:
+        changes = []
     print str(changes)
     return changes
 
@@ -287,35 +301,37 @@ def consensus(ref, aligned_reads):
 
 if __name__ == "__main__":
 
-    # ### Testing code for Smith-Waterman Algorithm
     # print edit_distance_matrix('$PRETTY', '$PRTTEIN')
     # identify_changes('PRETTY', 'PRTTEIN', offset=0)
-    # identify_changes(ref='ACACCC', donor='ATACCCGGG', offset=0)
-    # identify_changes(ref='ATACCCGGG', donor='ACACCC', offset=0)
-    # identify_changes(ref='ACACCC', donor='GGGATACCC', offset=0)
+    # ### Testing code for Smith-Waterman Algorithm
+    #
+    #identify_changes(ref='ACACCC', donor='ATACCCGGG', offset=0)
+    #identify_changes(ref='ATACCCGGG', donor='ACACCC', offset=0)
+    #identify_changes(ref='ACACCC', donor='GGGATACCC', offset=0)
     # identify_changes(ref='ACA', donor='AGA', offset=0)
-    # identify_changes(ref='ACA', donor='ACGTA', offset=0)
-    # identify_changes(ref='TTACCGTGCAAGCG', donor='GCACCCAAGTTCG', offset=0)
+    #identify_changes(ref='ACA', donor='ACGTA', offset=0)
+    #identify_changes(ref='TTACCGTGCAAGCG', donor='GCACCCAAGTTCG', offset=0)
     # ### /Testing Code
     #
-    genome_name = 'hw2undergrad_E_2'
-    input_folder = './PA2/{}'.format(genome_name)
-    chr_name = '{}_chr_1'.format(genome_name)
-    reads_fn_end = 'reads_{}.txt'.format(chr_name)
-    reads_fn = join(input_folder, reads_fn_end)
-    ref_fn_end = 'ref_{}.txt'.format(chr_name)
-    ref_fn = join(input_folder, ref_fn_end)
-    start = time.clock()
-    input_fn = join(input_folder, 'aligned_reads_{}.txt'.format(chr_name))
-    snps, insertions, deletions = generate_pileup(input_fn)
-    output_fn = join(input_folder, 'changes_{}.txt'.format(chr_name))
-    with open(output_fn, 'w') as output_file:
-        output_file.write('>' + chr_name + '\n>SNP\n')
-        for x in snps:
-            output_file.write(','.join([str(u) for u in x[1:]]) + '\n')
-        output_file.write('>INS\n')
-        for x in insertions:
-            output_file.write(','.join([str(u) for u in x[1:]]) + '\n')
-        output_file.write('>DEL\n')
-        for x in deletions:
-            output_file.write(','.join([str(u) for u in x[1:]]) + '\n')
+
+     genome_name = 'hw2undergrad_E_2'
+     input_folder = join('../data/', genome_name)
+     chr_name = '{}_chr_1'.format(genome_name)
+     reads_fn_end = 'reads_{}.txt'.format(chr_name)
+     reads_fn = join(input_folder, reads_fn_end)
+     ref_fn_end = 'ref_{}.txt'.format(chr_name)
+     ref_fn = join(input_folder, ref_fn_end)
+     start = time.clock()
+     input_fn = join(input_folder, 'aligned_{}.txt'.format(chr_name))
+     snps, insertions, deletions = generate_pileup(input_fn)
+     output_fn = join(input_folder, 'changes_{}.txt'.format(chr_name))
+     with open(output_fn, 'w') as output_file:
+         output_file.write('>' + chr_name + '\n>SNP\n')
+         for x in snps:
+             output_file.write(','.join([str(u) for u in x[1:]]) + '\n')
+         output_file.write('>INS\n')
+         for x in insertions:
+             output_file.write(','.join([str(u) for u in x[1:]]) + '\n')
+         output_file.write('>DEL\n')
+         for x in deletions:
+             output_file.write(','.join([str(u) for u in x[1:]]) + '\n')
