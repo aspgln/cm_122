@@ -13,7 +13,6 @@ def hash_end(end, genome_ht):
     """
     Uses hashing to identify the set of locations spanned by
     a read.
-
     :param end: A single end of a read
     :param genome_ht: A hash of the genome with uniform key length
     :return:
@@ -47,7 +46,6 @@ def hash_read(read, genome_ht):
     """
     Uses hashing to identify the set of locations spanned by
     a read.
-
     :param read: A single read
     :param genome_ht: A hash of the genome with uniform key length
     :return:
@@ -71,7 +69,6 @@ def hash_read(read, genome_ht):
 
 def make_genome_hash(reference, key_length):
     """
-
     :param reference: The reference as a string stored
     :param key_length: The length of keys to use.
     :return:
@@ -101,7 +98,6 @@ def build_hash_and_pickle(ref_fn, key_length, force_rebuild=False):
 
 def hashing_algorithm(paired_end_reads, genome_ht):
     """
-
     :param paired_end_reads:
     :param genome_ht:
     :return:
@@ -124,7 +120,7 @@ def hashing_algorithm(paired_end_reads, genome_ht):
     return alignments, genome_aligned_reads
 
 if __name__ == "__main__":
-    genome_name = 'practice_W_1'
+    genome_name = 'hw2undergrad_E_2'
     input_folder = '../data/{}'.format(genome_name)
     chr_name = '{}_chr_1'.format(genome_name)
     reads_fn_end = 'reads_{}.txt'.format(chr_name)
@@ -143,4 +139,6 @@ if __name__ == "__main__":
     # print genome_aligned_reads
     # print alignments
     output_str = pretty_print_aligned_reads_with_ref(genome_aligned_reads, alignments, ref)
-    print output_str[:5000]
+    output_fn = join(input_folder, 'aligned_{}.txt'.format(chr_name))
+    with(open(output_fn, 'w')) as output_file:
+        output_file.write(output_str)
